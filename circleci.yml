@@ -1,0 +1,92 @@
+version: 2
+jobs:
+  Build and Test Server Adding Sauce Labs:
+    docker:
+    - image: circleci/node:8.11.3
+    - image: circleci/mongo:3.6.5-jessie
+    - image: circleci/python
+
+    environment:
+      NODE_ENV: development
+
+    steps:
+    - checkout
+    - run:
+        name: Install MongoDb
+        command: |
+          set -x
+          sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv 0C49F3730359A14518585931BC711F9BA15703C6
+          echo "deb http://repo.mongodb.org/apt/debian jessie/mongodb-org/3.4 main" | sudo tee /etc/apt/sources.list.d/mongodb-org-3.4.list
+          sudo apt-get -qq -y update
+          sudo apt-get -qq -y install mongodb-org
+
+    - run:
+        name: Create local metadata database
+        command: mongorestore -d testDB server/dump/algodb/
+
+    - run:
+        name: Install Server Dependencies
+        working_directory: server
+        command: npm install
+
+    - run:
+        name: Server Unit Tests
+        working_directory: server
+        command:  npm run test
+
+    - store_test_results:
+        path: server/test-results
+
+    - run:
+        name: Install Python Packages for Selenium and Sauce Labs
+        command: |
+          sudo apt-get update
+          sudo apt-get install python-pip
+          pip install --user --upgrade selenium sauceclient urllib3
+
+    - run:
+        name: Start Node Website As Service (not blocking)
+        background: true
+        working_directory: server
+        command: npm start
+
+    - run:
+        name: Install Client Dependencies
+        working_directory: client
+        command: |
+          sudo npm install -g gulp@3.9.1
+          npm install
+
+    - run:
+        name: Build Client App
+        working_directory: client
+        command: gulp build
+
+    - run:
+        name: Install Sauce Labs and Set Up Tunnel
+        background: true
+        command: |
+          dockerize -wait http://localhost:3000 -timeout 1m
+          cd ../;
+          curl https://saucelabs.com/downloads/sc-4.5.2-linux.tar.gz -o saucelabs.tar.gz
+          tar -xzf saucelabs.tar.gz
+          cd sc-*
+          bin/sc -u $SAUCE_USER -k $SAUCE_KEY
+          wget --retry-connrefused --no-check-certificate -T 60 localhost:4445  # wait for app to be ready
+
+    - run:
+        name: Run end-to-end tests
+        working_directory: end-to-end-tests
+        command: |
+         sleep 20
+         python ./end-to-end-tests.py
+
+    - run:
+        name: Shut Down Sauce Connect Tunnel
+        command: kill -9 `cat /tmp/sc_client.pid`
+
+workflows:
+  version: 2
+  Build and Run Tests:
+    jobs:
+    - Build and Test Server Adding Sauce Labs
